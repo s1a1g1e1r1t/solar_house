@@ -34,6 +34,7 @@ fun InstructionsScreen(
     val totalSteps = steps.size.coerceAtLeast(1)
     var expandedStep by remember { mutableIntStateOf(1) }
     val solarColors = LocalSolarColors.current
+    val config = uiState.config
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -44,14 +45,16 @@ fun InstructionsScreen(
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Покрокова інструкція зі збірки", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    "Адаптована під ваш проєкт (${uiState.config.systemVoltage.label}, ${uiState.config.batteryChemistry.shortName}, ${uiState.config.inverterWatts} Вт).",
+                    if (config.isDirectSolarHeater)
+                        "Адаптована під схему прямого обігріву: ${uiState.metrics.totalPanelWatts} Вт → Електрокамін (${config.roomAreaM2} м²), м. ${config.city.cityName} (${uiState.metrics.effectiveTiltDegrees}°)."
+                    else
+                        "Адаптована під ваш проєкт (${config.systemVoltage.label}, ${config.batteryChemistry.shortName}, ${config.inverterWatts} Вт, м. ${config.city.cityName}).",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
 
-        // Progress Card
         item {
             ElevatedCard(
                 shape = RoundedCornerShape(18.dp),
@@ -81,7 +84,6 @@ fun InstructionsScreen(
             }
         }
 
-        // Critical Golden Rule Banner
         item {
             Surface(
                 color = solarColors.dangerContainer,
@@ -96,12 +98,18 @@ fun InstructionsScreen(
                     Icon(Icons.Filled.Bolt, contentDescription = null, tint = solarColors.dangerText)
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
-                            "Золоте правило першого запуску",
+                            if (config.isDirectSolarHeater)
+                                "Золоте правило прямого підключення до ТЕНа"
+                            else
+                                "Золоте правило першого запуску",
                             style = MaterialTheme.typography.titleSmall,
                             color = solarColors.dangerText
                         )
                         Text(
-                            "Порядок увімкнення: 1) Акумулятор → 2) Інвертор → 3) Сонячні панелі → 4) Домашнє навантаження. Ніколи не від'єднуйте АКБ, поки підключені панелі!",
+                            if (config.isDirectSolarHeater)
+                                "Використовуйте ТІЛЬКИ чисто резистивний нагрівач без електроніки та встановіть DC-автомат ${uiState.metrics.recommendedSolarBreakerA} А. Звичайний AC-вимикач або вилка в розетці призводять до електричної дуги!"
+                            else
+                                "Порядок увімкнення: 1) Акумулятор → 2) Інвертор → 3) Сонячні панелі → 4) Домашнє навантаження. Ніколи не від'єднуйте АКБ, поки підключені панелі!",
                             style = MaterialTheme.typography.bodySmall,
                             color = solarColors.dangerText
                         )
@@ -244,7 +252,6 @@ private fun BuildStepCard(
                         }
                     }
 
-                    // Dynamic engineering tip for this config
                     Surface(
                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
                         shape = RoundedCornerShape(12.dp),
@@ -263,7 +270,6 @@ private fun BuildStepCard(
                         }
                     }
 
-                    // Common beginner mistake
                     Surface(
                         color = solarColors.warningContainer,
                         shape = RoundedCornerShape(12.dp),

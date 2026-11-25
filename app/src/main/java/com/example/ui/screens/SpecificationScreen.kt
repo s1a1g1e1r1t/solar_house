@@ -6,7 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -44,14 +44,16 @@ fun SpecificationScreen(
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Специфікація та комплектація", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    "Розрахований перелік обладнання, кабелів і захисної автоматики для вашого проєкту.",
+                    if (config.isDirectSolarHeater)
+                        "Мінімальний набір для прямого обігріву кімнати ${config.roomAreaM2} м² (без АКБ та інвертора)."
+                    else
+                        "Розрахований перелік обладнання, кабелів і захисної автоматики для вашого проєкту.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
 
-        // Readiness Progress Card
         item {
             ElevatedCard(
                 shape = RoundedCornerShape(18.dp),
@@ -91,7 +93,6 @@ fun SpecificationScreen(
             }
         }
 
-        // Quick Electrical Reference Card
         item {
             ElevatedCard(shape = RoundedCornerShape(18.dp)) {
                 Column(
@@ -103,28 +104,45 @@ fun SpecificationScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Icon(Icons.Filled.Tune, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Text("Розрахункові параметри налаштувань", style = MaterialTheme.typography.titleSmall)
+                        Text("Розрахункові параметри", style = MaterialTheme.typography.titleSmall)
                     }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SpecPill("Струм АКБ макс.", "${metrics.maxDcBatteryCurrentA} А", Modifier.weight(1f))
-                        SpecPill("Кабель АКБ", "${metrics.recommendedBatteryCableMm2} мм²", Modifier.weight(1f))
-                        SpecPill("Запобіжник АКБ", "${metrics.recommendedBatteryFuseA} А", Modifier.weight(1f))
-                    }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SpecPill("Bulk заряд", "$bulkV В", Modifier.weight(1f))
-                        SpecPill("Float буфер", "$floatV В", Modifier.weight(1f))
-                        SpecPill("Відключення", "$cutV В", Modifier.weight(1f))
-                    }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SpecPill("Літо генерація", "${"%.1f".format(metrics.estimatedSummerDailyKwh)} кВт·г/д", Modifier.weight(1f))
-                        SpecPill("Зима генерація", "${"%.1f".format(metrics.estimatedWinterDailyKwh)} кВт·г/д", Modifier.weight(1f))
-                        SpecPill("Voc (-20°C)", "${metrics.arrayVocWinterMinus20.roundToInt()} В", Modifier.weight(1f))
+                    if (config.isDirectSolarHeater) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SpecPill("Площа кімнати", "${config.roomAreaM2} м²", Modifier.weight(1f))
+                            SpecPill("Потреба тепла", "${metrics.recommendedHeaterWattsForRoom} Вт", Modifier.weight(1f))
+                            SpecPill("Покриття", "${metrics.heaterCoveragePercent}%", Modifier.weight(1f))
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SpecPill("Струм поля Imp", "${"%.1f".format(metrics.arrayImp)} А", Modifier.weight(1f))
+                            SpecPill("Кабель PV1-F", "${metrics.recommendedSolarCableMm2} мм²", Modifier.weight(1f))
+                            SpecPill("DC Автомат", "${metrics.recommendedSolarBreakerA} А", Modifier.weight(1f))
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SpecPill("Кут (${config.city.cityName})", "${metrics.effectiveTiltDegrees}°", Modifier.weight(1f))
+                            SpecPill("Зима тепло", "${"%.1f".format(metrics.estimatedWinterDailyKwh)} кВт·г/д", Modifier.weight(1f))
+                            SpecPill("Літо тепло", "${"%.1f".format(metrics.estimatedSummerDailyKwh)} кВт·г/д", Modifier.weight(1f))
+                        }
+                    } else {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SpecPill("Струм АКБ макс.", "${metrics.maxDcBatteryCurrentA} А", Modifier.weight(1f))
+                            SpecPill("Кабель АКБ", "${metrics.recommendedBatteryCableMm2} мм²", Modifier.weight(1f))
+                            SpecPill("Запобіжник АКБ", "${metrics.recommendedBatteryFuseA} А", Modifier.weight(1f))
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SpecPill("Bulk заряд", "$bulkV В", Modifier.weight(1f))
+                            SpecPill("Float буфер", "$floatV В", Modifier.weight(1f))
+                            SpecPill("Відключення", "$cutV В", Modifier.weight(1f))
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SpecPill("Кут (${config.city.cityName})", "${metrics.effectiveTiltDegrees}°", Modifier.weight(1f))
+                            SpecPill("Літо", "${"%.1f".format(metrics.estimatedSummerDailyKwh)} кВт·г/д", Modifier.weight(1f))
+                            SpecPill("Зима", "${"%.1f".format(metrics.estimatedWinterDailyKwh)} кВт·г/д", Modifier.weight(1f))
+                        }
                     }
                 }
             }
         }
 
-        // Categorized BOM Items
         groupedBom.forEach { (category, itemsInCat) ->
             item {
                 Text(

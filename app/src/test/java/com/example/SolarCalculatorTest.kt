@@ -1,12 +1,8 @@
 package com.example
 
 import com.example.domain.SolarCalculator
-import com.example.model.AlertSeverity
-import com.example.model.ControllerType
-import com.example.model.StationTier
-import com.example.model.SystemVoltage
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import com.example.model.*
+import org.junit.Assert.*
 import org.junit.Test
 
 class SolarCalculatorTest {
@@ -22,6 +18,40 @@ class SolarCalculatorTest {
         assertTrue(basic.totalPanelWatts < optimal.totalPanelWatts)
         assertTrue(optimal.totalPanelWatts < maxi.totalPanelWatts)
         assertTrue(mini.usableBatteryWh < maxi.usableBatteryWh)
+    }
+
+    @Test
+    fun `direct solar heater preset has no battery or inverter and computes room wattage`() {
+        val config = SolarCalculator.presetConfig(StationTier.DIRECT_HEATER).copy(
+            roomAreaM2 = 20,
+            roomInsulation = RoomInsulation.AVERAGE
+        )
+        val metrics = SolarCalculator.calculateMetrics(config)
+        val bom = SolarCalculator.generateBom(config, metrics)
+        val steps = SolarCalculator.generateBuildSteps(config, metrics)
+
+        assertTrue(config.isDirectSolarHeater)
+        assertEquals(0, metrics.batteryNominalWh)
+        assertEquals(2000, metrics.recommendedHeaterWattsForRoom)
+        assertTrue(bom.none { it.id == "battery" || it.id == "inverter" })
+        assertTrue(bom.any { it.id == "heater" })
+        assertEquals(5, steps.size)
+    }
+
+    @Test
+    fun `city location adjusts optimal tilt angle and solar yield`() {
+        val odesaConfig = SolarCalculator.presetConfig(StationTier.BASIC).copy(
+            city = CityLocation.ODESA,
+            panelTilt = PanelTilt.WINTER_55,
+            useCityAutoTilt = true
+        )
+        val chernihivConfig = odesaConfig.copy(city = CityLocation.CHERNIHIV)
+
+        val odesaMetrics = SolarCalculator.calculateMetrics(odesaConfig)
+        val chernihivMetrics = SolarCalculator.calculateMetrics(chernihivConfig)
+
+        assertTrue(odesaMetrics.effectiveTiltDegrees < chernihivMetrics.effectiveTiltDegrees)
+        assertTrue(odesaMetrics.estimatedWinterDailyKwh > chernihivMetrics.estimatedWinterDailyKwh)
     }
 
     @Test
@@ -46,7 +76,7 @@ class SolarCalculatorTest {
     }
 
     @Test
-    fun `BOM and 7 build steps generated for any configuration`() {
+    fun `BOM and 7 build steps generated for battery configuration`() {
         val config = SolarCalculator.presetConfig(StationTier.OPTIMAL)
         val metrics = SolarCalculator.calculateMetrics(config)
         val bom = SolarCalculator.generateBom(config, metrics)

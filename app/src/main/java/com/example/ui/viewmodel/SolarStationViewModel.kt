@@ -17,13 +17,8 @@ data class SolarUiState(
     val checkedBomIds: Set<String> = emptySet(),
     val completedStepNumbers: Set<Int> = emptySet(),
     val activeBlueprint: BlueprintType = BlueprintType.WIRING_SCHEMATIC,
-    val inspectedNode: SchematicNodeInfo? = null,
-    val showPresetsSheet: Boolean = false
-) {
-    init {
-        // Initialized via ViewModel
-    }
-}
+    val inspectedNode: SchematicNodeInfo? = null
+)
 
 class SolarStationViewModel : ViewModel() {
 
@@ -45,11 +40,67 @@ class SolarStationViewModel : ViewModel() {
     }
 
     fun applyPreset(tier: StationTier) {
-        val currentApps = _uiState.value.config.appliances
-        val preset = SolarCalculator.presetConfig(tier)
-        // Keep user's appliance list structure, apply preset selections
-        val updatedConfig = if (currentApps.isEmpty()) preset else preset
-        recalculate(updatedConfig)
+        val currentCity = _uiState.value.config.city
+        val preset = SolarCalculator.presetConfig(tier).copy(
+            city = currentCity,
+            manualTiltDegrees = currentCity.recommendedAngle(
+                if (tier == StationTier.DIRECT_HEATER || tier == StationTier.MAXI) PanelTilt.WINTER_55 else PanelTilt.YEAR_ROUND_35
+            )
+        )
+        recalculate(preset)
+    }
+
+    fun updateCity(city: CityLocation) {
+        val cfg = _uiState.value.config
+        recalculate(
+            cfg.copy(
+                city = city,
+                manualTiltDegrees = if (cfg.useCityAutoTilt) city.recommendedAngle(cfg.panelTilt) else cfg.manualTiltDegrees
+            )
+        )
+    }
+
+    fun updateUseCityAutoTilt(auto: Boolean) {
+        val cfg = _uiState.value.config
+        recalculate(
+            cfg.copy(
+                useCityAutoTilt = auto,
+                manualTiltDegrees = if (auto) cfg.city.recommendedAngle(cfg.panelTilt) else cfg.manualTiltDegrees
+            )
+        )
+    }
+
+    fun updateManualTiltDegrees(degrees: Int) {
+        val cfg = _uiState.value.config
+        recalculate(
+            cfg.copy(
+                useCityAutoTilt = false,
+                manualTiltDegrees = degrees.coerceIn(15, 65)
+            )
+        )
+    }
+
+    fun updateRoomArea(areaM2: Int) {
+        val cfg = _uiState.value.config
+        val clamped = areaM2.coerceIn(6, 60)
+        val recommendedWatts = clamped * cfg.roomInsulation.wattsPerSqMeter
+        recalculate(
+            cfg.copy(
+                roomAreaM2 = clamped,
+                heaterRatedWatts = recommendedWatts
+            )
+        )
+    }
+
+    fun updateRoomInsulation(insulation: RoomInsulation) {
+        val cfg = _uiState.value.config
+        val recommendedWatts = cfg.roomAreaM2 * insulation.wattsPerSqMeter
+        recalculate(
+            cfg.copy(
+                roomInsulation = insulation,
+                heaterRatedWatts = recommendedWatts
+            )
+        )
     }
 
     fun updateSystemVoltage(voltage: SystemVoltage) {
@@ -105,7 +156,13 @@ class SolarStationViewModel : ViewModel() {
     }
 
     fun updatePanelTilt(tilt: PanelTilt) {
-        recalculate(_uiState.value.config.copy(panelTilt = tilt))
+        val cfg = _uiState.value.config
+        recalculate(
+            cfg.copy(
+                panelTilt = tilt,
+                manualTiltDegrees = if (cfg.useCityAutoTilt) cfg.city.recommendedAngle(tilt) else cfg.manualTiltDegrees
+            )
+        )
     }
 
     fun updatePanelOrientation(orientation: PanelOrientation) {
@@ -171,7 +228,8 @@ class SolarStationViewModel : ViewModel() {
                 config = newConfig,
                 metrics = newMetrics,
                 bomItems = newBom,
-                buildSteps = newSteps
+                buildSteps = newSteps,
+                inspectedNode = null
             )
         }
     }

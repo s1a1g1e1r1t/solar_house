@@ -1,6 +1,7 @@
 package com.example.domain
 
 import com.example.model.*
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -25,8 +26,38 @@ object SolarCalculator {
     fun presetConfig(tier: StationTier): SolarStationConfig {
         val baseAppliances = defaultAppliances()
         return when (tier) {
+            StationTier.DIRECT_HEATER -> SolarStationConfig(
+                tier = StationTier.DIRECT_HEATER,
+                isDirectSolarHeater = true,
+                roomAreaM2 = 16,
+                roomInsulation = RoomInsulation.AVERAGE,
+                heaterRatedWatts = 1500,
+                city = CityLocation.KYIV,
+                useCityAutoTilt = true,
+                manualTiltDegrees = CityLocation.KYIV.recommendedAngle(PanelTilt.WINTER_55),
+                systemVoltage = SystemVoltage.V48,
+                panelWattage = 410,
+                seriesCount = 5,
+                parallelStrings = 1,
+                controllerType = ControllerType.MPPT,
+                batteryChemistry = BatteryChemistry.LIFEPO4,
+                batteryCapacityAh = 100,
+                inverterWatts = 1500,
+                inverterType = InverterType.PURE_SINE_OFFGRID,
+                panelTilt = PanelTilt.WINTER_55,
+                panelOrientation = PanelOrientation.SOUTH,
+                includeSpdProtection = true,
+                includeGeneratorAts = false,
+                includeSmartBms = false,
+                appliances = baseAppliances.map { it.copy(selected = false) }
+            )
+
             StationTier.MINI -> SolarStationConfig(
                 tier = StationTier.MINI,
+                isDirectSolarHeater = false,
+                city = CityLocation.KYIV,
+                useCityAutoTilt = true,
+                manualTiltDegrees = CityLocation.KYIV.recommendedAngle(PanelTilt.YEAR_ROUND_35),
                 systemVoltage = SystemVoltage.V12,
                 panelWattage = 330,
                 seriesCount = 2,
@@ -48,6 +79,10 @@ object SolarCalculator {
 
             StationTier.BASIC -> SolarStationConfig(
                 tier = StationTier.BASIC,
+                isDirectSolarHeater = false,
+                city = CityLocation.KYIV,
+                useCityAutoTilt = true,
+                manualTiltDegrees = CityLocation.KYIV.recommendedAngle(PanelTilt.YEAR_ROUND_35),
                 systemVoltage = SystemVoltage.V24,
                 panelWattage = 410,
                 seriesCount = 4,
@@ -69,6 +104,10 @@ object SolarCalculator {
 
             StationTier.OPTIMAL -> SolarStationConfig(
                 tier = StationTier.OPTIMAL,
+                isDirectSolarHeater = false,
+                city = CityLocation.KYIV,
+                useCityAutoTilt = true,
+                manualTiltDegrees = CityLocation.KYIV.recommendedAngle(PanelTilt.YEAR_ROUND_35),
                 systemVoltage = SystemVoltage.V48,
                 panelWattage = 450,
                 seriesCount = 8,
@@ -90,6 +129,10 @@ object SolarCalculator {
 
             StationTier.MAXI -> SolarStationConfig(
                 tier = StationTier.MAXI,
+                isDirectSolarHeater = false,
+                city = CityLocation.KYIV,
+                useCityAutoTilt = true,
+                manualTiltDegrees = CityLocation.KYIV.recommendedAngle(PanelTilt.WINTER_55),
                 systemVoltage = SystemVoltage.V48,
                 panelWattage = 550,
                 seriesCount = 9,
@@ -113,7 +156,6 @@ object SolarCalculator {
         val totalPanels = config.totalPanels
         val totalPanelWatts = totalPanels * config.panelWattage
 
-        // Realistic electrical parameters by panel wattage class
         val (singleVoc, singleVmp) = when {
             config.panelWattage >= 480 -> 49.6f to 41.5f
             config.panelWattage >= 380 -> 37.8f to 31.6f
@@ -122,10 +164,102 @@ object SolarCalculator {
         val singleImp = config.panelWattage / singleVmp
 
         val arrayVocNominal = singleVoc * config.seriesCount
-        val arrayVocWinter = arrayVocNominal * 1.15f // +15% safety margin at -20°C
+        val arrayVocWinter = arrayVocNominal * 1.15f
         val arrayVmp = singleVmp * config.seriesCount
         val arrayImp = singleImp * config.parallelStrings
 
+        val effectiveTilt = config.effectiveTiltDegrees
+        val optimalSummerAngle = config.city.recommendedAngle(PanelTilt.SUMMER_25).toFloat()
+        val optimalWinterAngle = config.city.recommendedAngle(PanelTilt.WINTER_55).toFloat()
+
+        // Tilt match factors relative to city latitude
+        val summerTiltFactor = (1.06f - abs(effectiveTilt - optimalSummerAngle) * 0.0045f).coerceIn(0.75f, 1.06f)
+        val winterTiltFactor = (1.14f - abs(effectiveTilt - optimalWinterAngle) * 0.0055f).coerceIn(0.70f, 1.15f)
+
+        val systemDerate = if (config.isDirectSolarHeater) 0.92f else config.controllerType.efficiency * 0.86f
+        val estimatedSummerDailyKwh = (totalPanelWatts / 1000f) * config.city.summerPsh * summerTiltFactor * config.panelOrientation.summerFactor * systemDerate
+        val estimatedWinterDailyKwh = (totalPanelWatts / 1000f) * config.city.winterPsh * winterTiltFactor * config.panelOrientation.winterFactor * systemDerate
+
+        val recommendedSolarCableMm2 = when {
+            arrayImp <= 15f -> 4
+            arrayImp <= 30f -> 6
+            else -> 10
+        }
+        val rawSolarBreaker = (arrayImp * 1.3f).roundToInt()
+        val recommendedSolarBreakerA = listOf(16, 20, 25, 32, 40, 50, 63)
+            .firstOrNull { it >= rawSolarBreaker } ?: 63
+
+        val recommendedHeaterWattsForRoom = config.roomAreaM2 * config.roomInsulation.wattsPerSqMeter
+        val heaterCoveragePercent = ((totalPanelWatts.toFloat() / recommendedHeaterWattsForRoom.coerceAtLeast(100)) * 100f)
+            .roundToInt()
+            .coerceIn(0, 200)
+
+        val alerts = mutableListOf<EngineeringAlert>()
+
+        if (config.isDirectSolarHeater) {
+            val dailyHeatNeedKwh = (recommendedHeaterWattsForRoom * 6f) / 1000f
+            val rawMpptCurrent = 0
+            val hourlyCurve = buildDirectHeaterCurve(
+                totalPanelWatts = totalPanelWatts,
+                summerDailyKwh = estimatedSummerDailyKwh,
+                winterDailyKwh = estimatedWinterDailyKwh,
+                heaterWatts = recommendedHeaterWattsForRoom.toFloat()
+            )
+
+            if (arrayVmp > 245f) {
+                alerts += EngineeringAlert(
+                    title = "Зависока напруга для стандартного 230В каміна",
+                    message = "Робоча напруга поля ${arrayVmp.roundToInt()} В (холостий хід ${arrayVocWinter.roundToInt()} В). Для 230В ТЕНа оптимально 5–7 панелей послідовно (155–225 В).",
+                    severity = AlertSeverity.WARNING
+                )
+            }
+            if (totalPanelWatts < recommendedHeaterWattsForRoom * 0.85f) {
+                alerts += EngineeringAlert(
+                    title = "Потужності панелей замало для площі ${config.roomAreaM2} м²",
+                    message = "Для кімнати ${config.roomAreaM2} м² (${config.roomInsulation.label}) потрібно ~${recommendedHeaterWattsForRoom} Вт тепла. Ваше поле (${totalPanelWatts} Вт) покриє близько $heaterCoveragePercent% у ясний день.",
+                    severity = AlertSeverity.WARNING
+                )
+            }
+            alerts += EngineeringAlert(
+                title = "Важлива умова прямого підключення без АКБ",
+                message = "Підходить ТІЛЬКИ простий резистивний електрокамін/ТЕН без електронної плати, вентилятора чи Wi-Fi. Вимикайте лінію тільки DC-автоматом ${recommendedSolarBreakerA}А, щоб уникнути дуги.",
+                severity = AlertSeverity.INFO
+            )
+
+            return CalculatedStationMetrics(
+                totalPanelWatts = totalPanelWatts,
+                singlePanelVoc = singleVoc,
+                singlePanelVmp = singleVmp,
+                singlePanelImp = singleImp,
+                arrayVocNominal = arrayVocNominal,
+                arrayVocWinterMinus20 = arrayVocWinter,
+                arrayVmp = arrayVmp,
+                arrayImp = arrayImp,
+                recommendedMpptCurrentA = rawMpptCurrent,
+                requiredMpptMaxVoc = 0,
+                batteryNominalWh = 0,
+                usableBatteryWh = 0,
+                maxDcBatteryCurrentA = arrayImp.roundToInt(),
+                recommendedBatteryCableMm2 = recommendedSolarCableMm2,
+                recommendedSolarCableMm2 = recommendedSolarCableMm2,
+                recommendedBatteryFuseA = recommendedSolarBreakerA,
+                recommendedSolarBreakerA = recommendedSolarBreakerA,
+                recommendedAcBreakerA = 0,
+                estimatedSummerDailyKwh = estimatedSummerDailyKwh,
+                estimatedWinterDailyKwh = estimatedWinterDailyKwh,
+                dailyLoadKwh = dailyHeatNeedKwh,
+                peakLoadWatts = recommendedHeaterWattsForRoom,
+                surgeLoadWatts = recommendedHeaterWattsForRoom,
+                autonomyHours = 0f,
+                recommendedHeaterWattsForRoom = recommendedHeaterWattsForRoom,
+                heaterCoveragePercent = heaterCoveragePercent,
+                effectiveTiltDegrees = effectiveTilt,
+                alerts = alerts,
+                hourlyCurve = hourlyCurve
+            )
+        }
+
+        // Standard Autonomous Station with Battery & Inverter
         val rawMpptCurrent = (totalPanelWatts.toFloat() / config.systemVoltage.volts) * config.controllerType.efficiency
         val recommendedMpptCurrentA = listOf(30, 40, 60, 80, 100, 120, 150, 200)
             .firstOrNull { it >= ceil(rawMpptCurrent.toDouble()).toInt() } ?: 200
@@ -152,33 +286,13 @@ object SolarCalculator {
             else -> 95
         }
 
-        val recommendedSolarCableMm2 = when {
-            arrayImp <= 15f -> 4
-            arrayImp <= 30f -> 6
-            else -> 10
-        }
-
         val rawBatteryFuse = (maxDcBatteryCurrentA * 1.25f).roundToInt()
         val recommendedBatteryFuseA = listOf(40, 60, 80, 100, 125, 150, 200, 250, 300, 350)
             .firstOrNull { it >= rawBatteryFuse } ?: 350
 
-        val rawSolarBreaker = (arrayImp * 1.3f).roundToInt()
-        val recommendedSolarBreakerA = listOf(16, 20, 25, 32, 40, 50, 63)
-            .firstOrNull { it >= rawSolarBreaker } ?: 63
-
         val rawAcCurrent = (config.inverterWatts / 230f) * 1.2f
         val recommendedAcBreakerA = listOf(6, 10, 16, 20, 25, 32, 40, 50, 63)
             .firstOrNull { it >= ceil(rawAcCurrent.toDouble()).toInt() } ?: 63
-
-        // Solar Yield Calculation (Ukraine average PSH: ~4.9h summer, ~1.25h winter)
-        val (summerTiltFactor, winterTiltFactor) = when (config.panelTilt) {
-            PanelTilt.SUMMER_25 -> 1.05f to 0.78f
-            PanelTilt.YEAR_ROUND_35 -> 1.00f to 0.94f
-            PanelTilt.WINTER_55 -> 0.85f to 1.15f
-        }
-        val systemDerate = config.controllerType.efficiency * 0.86f
-        val estimatedSummerDailyKwh = (totalPanelWatts / 1000f) * 4.9f * summerTiltFactor * config.panelOrientation.summerFactor * systemDerate
-        val estimatedWinterDailyKwh = (totalPanelWatts / 1000f) * 1.25f * winterTiltFactor * config.panelOrientation.winterFactor * systemDerate
 
         val selectedApps = config.appliances.filter { it.selected }
         val dailyLoadKwh = selectedApps.sumOf { (it.watts * it.dailyHours).toDouble() }.toFloat() / 1000f
@@ -188,9 +302,6 @@ object SolarCalculator {
 
         val avgHourlyWatts = max(50f, (dailyLoadKwh * 1000f) / 24f)
         val autonomyHours = usableBatteryWh / avgHourlyWatts
-
-        // Engineering Alerts & Safety Diagnostics
-        val alerts = mutableListOf<EngineeringAlert>()
 
         if (config.systemVoltage == SystemVoltage.V12 && config.inverterWatts > 1500) {
             alerts += EngineeringAlert(
@@ -237,7 +348,7 @@ object SolarCalculator {
         if (dailyLoadKwh > estimatedSummerDailyKwh * 1.05f && selectedApps.isNotEmpty()) {
             alerts += EngineeringAlert(
                 title = "Дефіцит сонячної генерації",
-                message = "Добове споживання (${"%.1f".format(dailyLoadKwh)} кВт·год) перевищує літній виробіток (${"%.1f".format(estimatedSummerDailyKwh)} кВт·год). Додайте панелей або зменште навантаження.",
+                message = "Добове споживання (${"%.1f".format(dailyLoadKwh)} кВт·год) перевищує літній виробіток у м. ${config.city.cityName} (${"%.1f".format(estimatedSummerDailyKwh)} кВт·год). Додайте панелей або зменште навантаження.",
                 severity = AlertSeverity.WARNING
             )
         }
@@ -251,12 +362,11 @@ object SolarCalculator {
         if (alerts.isEmpty()) {
             alerts += EngineeringAlert(
                 title = "Конфігурація збалансована",
-                message = "Напруга поля (${arrayVmp.roundToInt()} В), ємність АКБ (${"%.1f".format(usableBatteryWh / 1000f)} кВт·год корисних) та потужність інвертора узгоджені.",
+                message = "Для м. ${config.city.cityName} (кут $effectiveTilt°): поле ${arrayVmp.roundToInt()} В, АКБ ${"%.1f".format(usableBatteryWh / 1000f)} кВт·год корисних та інвертор узгоджені.",
                 severity = AlertSeverity.INFO
             )
         }
 
-        // 24h energy curve simulation (hour 0..23)
         val hourlyCurve = buildHourlyCurve(
             totalPanelWatts = totalPanelWatts,
             summerDailyKwh = estimatedSummerDailyKwh,
@@ -290,9 +400,41 @@ object SolarCalculator {
             peakLoadWatts = peakLoadWatts,
             surgeLoadWatts = surgeLoadWatts,
             autonomyHours = autonomyHours,
+            recommendedHeaterWattsForRoom = recommendedHeaterWattsForRoom,
+            heaterCoveragePercent = heaterCoveragePercent,
+            effectiveTiltDegrees = effectiveTilt,
             alerts = alerts,
             hourlyCurve = hourlyCurve
         )
+    }
+
+    private fun buildDirectHeaterCurve(
+        totalPanelWatts: Int,
+        summerDailyKwh: Float,
+        winterDailyKwh: Float,
+        heaterWatts: Float
+    ): List<HourlyEnergyPoint> {
+        val rawSummerShape = (0..23).map { h ->
+            if (h in 6..19) kotlin.math.sin(((h - 5.5) / 14.0) * Math.PI).toFloat().coerceAtLeast(0f) else 0f
+        }
+        val rawWinterShape = (0..23).map { h ->
+            if (h in 9..15) kotlin.math.sin(((h - 8.5) / 7.0) * Math.PI).toFloat().coerceAtLeast(0f) else 0f
+        }
+        val summerSum = rawSummerShape.sum().coerceAtLeast(1f)
+        val winterSum = rawWinterShape.sum().coerceAtLeast(1f)
+
+        return (0..23).map { h ->
+            val summerW = ((rawSummerShape[h] / summerSum) * summerDailyKwh * 1000f).coerceAtMost(totalPanelWatts.toFloat())
+            val winterW = ((rawWinterShape[h] / winterSum) * winterDailyKwh * 1000f).coerceAtMost(totalPanelWatts.toFloat())
+            val activeHeatNeed = if (h in 8..18) heaterWatts else heaterWatts * 0.7f
+            HourlyEnergyPoint(
+                hour = h,
+                summerSolarW = summerW,
+                winterSolarW = winterW,
+                loadW = activeHeatNeed,
+                batterySocPercent = 0f
+            )
+        }
     }
 
     private fun buildHourlyCurve(
@@ -346,6 +488,67 @@ object SolarCalculator {
     }
 
     fun generateBom(config: SolarStationConfig, m: CalculatedStationMetrics): List<BomItem> {
+        if (config.isDirectSolarHeater) {
+            return listOf(
+                BomItem(
+                    id = "panels",
+                    category = "Генерація (ФЕМ)",
+                    title = "Сонячні панелі ${config.panelWattage} Вт (Mono Half-Cell)",
+                    specification = "Схема ${config.seriesCount}S × ${config.parallelStrings}P • ${m.totalPanelWatts} Вт • Vmp ${m.arrayVmp.roundToInt()} В",
+                    quantity = "${config.totalPanels} шт.",
+                    rationale = "Пряме живлення нагрівального елемента каміна у світлий час доби"
+                ),
+                BomItem(
+                    id = "mounting",
+                    category = "Генерація (ФЕМ)",
+                    title = "Алюмінієве кріплення під кут ${m.effectiveTiltDegrees}° (${config.city.cityName})",
+                    specification = "Орієнтація: ${config.panelOrientation.label} • Вент. зазор ≥ 12 см",
+                    quantity = "На ${config.totalPanels} панелей",
+                    rationale = "Оптимальний кут нахилу для обігріву в регіоні м. ${config.city.cityName}"
+                ),
+                BomItem(
+                    id = "solar_cable",
+                    category = "Кабелі та комутація",
+                    title = "Сонячний кабель PV1-F + конектори MC4",
+                    specification = "Переріз ${m.recommendedSolarCableMm2} мм² (подвійна ізоляція, червоний + чорний)",
+                    quantity = "2 × 15–25 м + 3 пари MC4",
+                    rationale = "Витримує струм поля ${"%.1f".format(m.arrayImp)} А без втрат"
+                ),
+                BomItem(
+                    id = "pv_breaker",
+                    category = "Захист і комутація",
+                    title = "Двополюсний DC-автомат / роз'єднувач + DC-запобіжник",
+                    specification = "Номінал ${m.recommendedSolarBreakerA} А, напруга DC ≥ 500 В",
+                    quantity = "1 компл.",
+                    rationale = "Обов'язково! Звичайні AC-вимикачі вигорають від дуги постійного струму"
+                ),
+                BomItem(
+                    id = "heater",
+                    category = "Обігрів (Кімната ${config.roomAreaM2} м²)",
+                    title = "Резистивний електрокамін / ТЕН (${m.recommendedHeaterWattsForRoom}–${config.heaterRatedWatts} Вт)",
+                    specification = "Лише чисто резистивний нагрівач БЕЗ плати електроніки і вентилятора",
+                    quantity = "1 шт.",
+                    rationale = "Розрахункова тепловтрата кімнати ${config.roomAreaM2} м² (${config.roomInsulation.label}): ~${m.recommendedHeaterWattsForRoom} Вт"
+                ),
+                BomItem(
+                    id = "dc_ssr",
+                    category = "Захист і комутація",
+                    title = "Термостат + DC твердотільне реле (SSR DC-DC)",
+                    specification = "Комутація навантаження без іскри та зносу контактів",
+                    quantity = "1 компл.",
+                    rationale = "Звичайний біметалічний термостат пригорає на постійному струмі > 50В DC"
+                ),
+                BomItem(
+                    id = "earthing",
+                    category = "Захист і комутація",
+                    title = "Заземлення рам панелей та корпусу каміна" + if (config.includeSpdProtection) " + DC УЗІП" else "",
+                    specification = "Провід ПВ-3 10 мм² + контур PE ≤ 4 Ом",
+                    quantity = "1 компл.",
+                    rationale = "Захист від пробою ізоляції на корпус та грозових наведень"
+                )
+            )
+        }
+
         val items = mutableListOf<BomItem>()
 
         items += BomItem(
@@ -354,14 +557,14 @@ object SolarCalculator {
             title = "Сонячні панелі ${config.panelWattage} Вт (Mono Half-Cell)",
             specification = "Схема ${config.seriesCount}S × ${config.parallelStrings}P • Загалом ${m.totalPanelWatts} Вт • Voc(зима) ${m.arrayVocWinterMinus20.roundToInt()} В",
             quantity = "${config.totalPanels} шт.",
-            rationale = "Забезпечує до ${"%.1f".format(m.estimatedSummerDailyKwh)} кВт·год/день влітку"
+            rationale = "Забезпечує до ${"%.1f".format(m.estimatedSummerDailyKwh)} кВт·год/день влітку (${config.city.cityName})"
         )
 
         items += BomItem(
             id = "mounting",
             category = "Генерація (ФЕМ)",
             title = "Кріплення (алюм. профіль, притиски, гаки/гвинт-шурупи)",
-            specification = "Кут нахилу ${config.panelTilt.degrees}° • Орієнтація: ${config.panelOrientation.label}",
+            specification = "Кут ${m.effectiveTiltDegrees}° (${config.city.cityName}) • Орієнтація: ${config.panelOrientation.label}",
             quantity = "На ${config.totalPanels} панелей",
             rationale = "Алюмінієвий профіль 40×40 мм + заземлення рам панелей"
         )
@@ -504,6 +707,86 @@ object SolarCalculator {
     }
 
     fun generateBuildSteps(config: SolarStationConfig, m: CalculatedStationMetrics): List<BuildStep> {
+        if (config.isDirectSolarHeater) {
+            return listOf(
+                BuildStep(
+                    number = 1,
+                    title = "Підбір електрокаміна під площу ${config.roomAreaM2} м² та DC-живлення",
+                    subtitle = "Без АКБ та інвертора — тільки прямий резистивний нагрів",
+                    estimatedTime = "1–2 год",
+                    safetyLevel = StepSafetyLevel.IMPORTANT,
+                    summary = "Для кімнати ${config.roomAreaM2} м² (${config.roomInsulation.label}) розрахункова теплова потреба становить ~${m.recommendedHeaterWattsForRoom} Вт. Пряме живлення від сонячних панелей придатне лише для чисто резистивного нагрівального елемента (ТЕН або спіраль без електронних плат, дисплеїв і вентилятора).",
+                    checklist = listOf(
+                        "Переконайтеся, що в обраному електрокаміні немає електронного контролера, LED-імітації полум'я на одному вводі або AC-вентилятора",
+                        "Зіставте робочу напругу панелей (Vmp = ${m.arrayVmp.roundToInt()} В) з номіналом ТЕНа (для стандартного 230В ТЕНа оптимально 150–230 В DC)",
+                        "Перевірте, що сумарна потужність панелей (${m.totalPanelWatts} Вт) узгоджена з ТЕНом"
+                    ),
+                    dynamicRecommendation = "Якщо камін має декоративну підсвітку чи вентилятор на 230В — живіть їх окремо від домашньої розетки або живіть лише нагрівальний ТЕН від сонячного поля.",
+                    commonMistake = "Підключення сучасного конвектора з електронним термостатом чи вентилятором напряму до постійного струму панелей — плата миттєво виходить з ладу."
+                ),
+                BuildStep(
+                    number = 2,
+                    title = "Монтаж панелей під оптимальний кут ${m.effectiveTiltDegrees}° (${config.city.cityName})",
+                    subtitle = "Орієнтація на південь для зимового/міжсезонного сонця",
+                    estimatedTime = "4–6 год",
+                    safetyLevel = StepSafetyLevel.CRITICAL,
+                    summary = "Для міста ${config.city.cityName} (широта ${"%.1f".format(config.city.latitude)}°) рекомендований кут нахилу складає ${m.effectiveTiltDegrees}°. Крутіший зимовий кут дозволяє збирати максимум низького сонця і допомагає снігу швидше сходити з панелей.",
+                    checklist = listOf(
+                        "Закріпіть алюмінієвий профіль на даху або південному фасаді під кутом ${m.effectiveTiltDegrees}°",
+                        "Залиште вентиляційний зазор 10–15 см під панелями",
+                        "Заземліть алюмінієві рами панелей проводом ПВ-3 10 мм² на контур PE"
+                    ),
+                    dynamicRecommendation = "У місті ${config.city.cityName} зимове сонце дає в середньому ${"%.1f".format(m.estimatedWinterDailyKwh)} кВт·год/день тепла від вашого масиву, а в ясні березневі/осінні дні — у 2–3 рази більше.",
+                    commonMistake = "Встановлення панелей горизонтально на плоский дах для зимового обігріву — взимку вироблення падає майже вдвічі, а сніг закриває скло."
+                ),
+                BuildStep(
+                    number = 3,
+                    title = "Комутація стрінгів та траса кабелю PV1-F",
+                    subtitle = "Схема ${config.seriesCount}S × ${config.parallelStrings}P • Кабель ${m.recommendedSolarCableMm2} мм²",
+                    estimatedTime = "2 год",
+                    safetyLevel = StepSafetyLevel.CRITICAL,
+                    summary = "З'єднайте ${config.totalPanels} панелей за схемою ${config.seriesCount}S × ${config.parallelStrings}P. Накрийте панелі картоном під час обтиску MC4, щоб на кабелі не було небезпечної напруги ~${m.arrayVocWinterMinus20.roundToInt()} В DC.",
+                    checklist = listOf(
+                        "Обтисніть конектори MC4 спеціалізованим кримпером",
+                        "Прокладіть кабель PV1-F ${m.recommendedSolarCableMm2} мм² у УФ-стійкій гофрі до місця щитка",
+                        "Виміряйте напругу холостого ходу (очікувано ~${m.arrayVocNominal.roundToInt()} В)"
+                    ),
+                    dynamicRecommendation = "Для мінімізації втрат на обігріві намагайтеся зробити трасу кабелю якомога коротшою (до 15–20 м).",
+                    commonMistake = "Поганий обтиск MC4 плоскогубцями — при тривалому струмі ${"%.1f".format(m.arrayImp)} А конектор нагрівається і плавиться."
+                ),
+                BuildStep(
+                    number = 4,
+                    title = "Встановлення DC-автомата та захист від електричної дуги",
+                    subtitle = "Критично важливий вузол для постійного струму",
+                    estimatedTime = "1.5 год",
+                    safetyLevel = StepSafetyLevel.CRITICAL,
+                    summary = "Постійний струм при напрузі ${m.arrayVmp.roundToInt()} В утворює стійку електричну дугу при розриві кола. Ніколи не використовуйте побутовий вимикач, звичайну розетку чи механічний термостат без DC-розриву!",
+                    checklist = listOf(
+                        "Змонтуйте двополюсний DC-автомат ${m.recommendedSolarBreakerA} А (на 500–1000 В DC) біля входу в кімнату",
+                        "Для автоматичного підтримання температури в кімнаті ${config.roomAreaM2} м² використовуйте термостат через DC-твердотільне реле (SSR DC-DC)",
+                        if (config.includeSpdProtection) "Підключіть DC УЗІП до шини заземлення PE" else "Перевірте заземлення металевого корпусу каміна"
+                    ),
+                    dynamicRecommendation = "Не вмикайте електрокамін від сонячних панелей через звичайну євровилку і розетку — при витягуванні вилки під навантаженням виникне дуга!",
+                    commonMistake = "Використання звичайного AC-автомата або штатного коліщатка-термостата каміна — контакти зварюються або вигорають за кілька циклів."
+                ),
+                BuildStep(
+                    number = 5,
+                    title = "Розміщення каміна в кімнаті та перший запуск",
+                    subtitle = "Перевірка нагріву, ізоляції та температурного режиму",
+                    estimatedTime = "1 год",
+                    safetyLevel = StepSafetyLevel.IMPORTANT,
+                    summary = "Встановіть електрокамін на відстані не менше 50 см від штор і меблів, заземліть корпус та подайте напругу через DC-автомат у сонячний день.",
+                    checklist = listOf(
+                        "Перевірте опір ізоляції на корпус каміна (немає замикання на землю)",
+                        "Увімкніть DC-автомат ${m.recommendedSolarBreakerA} А — переконайтеся, що ТЕН почав плавно нагріватися",
+                        "Через 20 хвилин роботи перевірте рукою або пірометром відсутність нагріву клем і кабелю"
+                    ),
+                    dynamicRecommendation = "На відміну від мережі 230В, теплова потужність від сонця змінюється плавно протягом дня залежно від хмарності — це нормально і не шкодить резистивному ТЕНу.",
+                    commonMistake = "Спроба запускати систему без заземлення корпусу каміна або накриття каміна речами для сушіння."
+                )
+            )
+        }
+
         val bulkV = "%.1f".format(config.batteryChemistry.chargeVoltsPer12V * (config.systemVoltage.volts / 12f))
         val floatV = "%.1f".format(config.batteryChemistry.floatVoltsPer12V * (config.systemVoltage.volts / 12f))
         val cutV = "%.1f".format(config.batteryChemistry.cutoffVoltsPer12V * (config.systemVoltage.volts / 12f))
@@ -545,11 +828,11 @@ object SolarCalculator {
             ),
             BuildStep(
                 number = 3,
-                title = "Монтаж сонячних панелей та траси PV",
-                subtitle = "Кріплення на дах/каркас під кутом ${config.panelTilt.degrees}°",
+                title = "Монтаж панелей під кут ${m.effectiveTiltDegrees}° (${config.city.cityName})",
+                subtitle = "Кріплення на дах/каркас (${config.panelOrientation.label})",
                 estimatedTime = "4–8 год",
                 safetyLevel = StepSafetyLevel.CRITICAL,
-                summary = "Встановіть ${config.totalPanels} панелей за схемою ${config.seriesCount}S × ${config.parallelStrings}P (орієнтація: ${config.panelOrientation.label}). Панелі на сонці завжди під високою напругою — накривайте їх картоном під час обтиску!",
+                summary = "Встановіть ${config.totalPanels} панелей за схемою ${config.seriesCount}S × ${config.parallelStrings}P під кутом ${m.effectiveTiltDegrees}° (оптимум для м. ${config.city.cityName}). Панелі на сонці завжди під високою напругою — накривайте їх картоном під час обтиску!",
                 checklist = listOf(
                     "Закріпіть алюмінієвий профіль до крокв даху з урахуванням вітрового навантаження",
                     "Заземліть алюмінієві рами панелей та профіль на окрему шину PE (не на громовідвід!)",

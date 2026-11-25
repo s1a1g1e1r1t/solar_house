@@ -104,6 +104,11 @@ fun SolarStationApp(
                         MainDestination.CONFIGURATOR -> ConfiguratorScreen(
                             uiState = uiState,
                             onApplyPreset = viewModel::applyPreset,
+                            onCityChange = viewModel::updateCity,
+                            onUseCityAutoTiltChange = viewModel::updateUseCityAutoTilt,
+                            onManualTiltChange = viewModel::updateManualTiltDegrees,
+                            onRoomAreaChange = viewModel::updateRoomArea,
+                            onRoomInsulationChange = viewModel::updateRoomInsulation,
                             onVoltageChange = viewModel::updateSystemVoltage,
                             onInverterTypeChange = viewModel::updateInverterType,
                             onControllerTypeChange = viewModel::updateControllerType,

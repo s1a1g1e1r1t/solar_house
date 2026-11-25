@@ -44,6 +44,9 @@ fun BlueprintsScreen(
         }
     }
 
+    val config = uiState.config
+    val metrics = uiState.metrics
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -51,7 +54,6 @@ fun BlueprintsScreen(
             .padding(bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Header + Blueprint Type Switcher
         Column(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -60,8 +62,13 @@ fun BlueprintsScreen(
                 text = "Інженерні креслення СЕС",
                 style = MaterialTheme.typography.headlineSmall
             )
+            val subtitle = if (config.isDirectSolarHeater) {
+                "Прямий обігрів без АКБ: ${metrics.totalPanelWatts} Вт → Камін (${config.roomAreaM2} м²) • ${config.city.cityName} (${metrics.effectiveTiltDegrees}°)."
+            } else {
+                "Схеми адаптовані під ваші параметри (${metrics.totalPanelWatts} Вт, ${config.systemVoltage.label}, ${config.inverterWatts} Вт, ${config.city.cityName} ${metrics.effectiveTiltDegrees}°)."
+            }
             Text(
-                text = "Схеми автоматично адаптуються до ваших параметрів (${uiState.metrics.totalPanelWatts} Вт, ${uiState.config.systemVoltage.label}, ${uiState.config.inverterWatts} Вт).",
+                text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -72,10 +79,15 @@ fun BlueprintsScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(BlueprintType.entries) { type ->
+                val label = if (type == BlueprintType.ARRAY_AND_BATTERY) {
+                    if (config.isDirectSolarHeater) "Панелі та камін" else "Панелі та АКБ"
+                } else {
+                    type.title
+                }
                 FilterChip(
                     selected = uiState.activeBlueprint == type,
                     onClick = { onSelectBlueprint(type) },
-                    label = { Text(type.title) },
+                    label = { Text(label) },
                     leadingIcon = {
                         Icon(
                             imageVector = when (type) {
@@ -93,7 +105,6 @@ fun BlueprintsScreen(
             }
         }
 
-        // Blueprint Interactive Viewport Card
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -108,8 +119,8 @@ fun BlueprintsScreen(
             ) {
                 InteractiveBlueprintCanvas(
                     blueprintType = uiState.activeBlueprint,
-                    config = uiState.config,
-                    metrics = uiState.metrics,
+                    config = config,
+                    metrics = metrics,
                     zoom = zoom,
                     pan = pan,
                     onTransform = { zoomDelta, panDelta ->
@@ -121,7 +132,6 @@ fun BlueprintsScreen(
                     modifier = Modifier.fillMaxSize()
                 )
 
-                // Floating Zoom Controls (Top Right)
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -154,7 +164,6 @@ fun BlueprintsScreen(
                     }
                 }
 
-                // Interaction hint badge
                 Surface(
                     color = BlueprintNavy.copy(alpha = 0.85f),
                     shape = RoundedCornerShape(50.dp),
@@ -175,7 +184,6 @@ fun BlueprintsScreen(
             }
         }
 
-        // Wire Legend Bar
         if (uiState.activeBlueprint != BlueprintType.ENERGY_BALANCE) {
             Row(
                 modifier = Modifier
@@ -183,14 +191,15 @@ fun BlueprintsScreen(
                     .padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                LegendDot(WireDcPositive, "+DC (${uiState.metrics.recommendedBatteryCableMm2}мм²)")
+                LegendDot(WireDcPositive, "+DC (${metrics.recommendedSolarCableMm2}мм²)")
                 LegendDot(WireDcNegative, "-DC (Мінус)")
-                LegendDot(WireAcPhase, "AC 230В")
+                if (!config.isDirectSolarHeater) {
+                    LegendDot(WireAcPhase, "AC 230В")
+                }
                 LegendDot(WireGround, "PE Заземлення")
             }
         }
 
-        // Inspected Component Detail Card
         AnimatedVisibility(visible = uiState.inspectedNode != null) {
             uiState.inspectedNode?.let { node ->
                 ElevatedCard(
@@ -249,7 +258,6 @@ fun BlueprintsScreen(
             }
         }
 
-        // Technical Quick-Readout Summary Card below blueprint
         ElevatedCard(
             modifier = Modifier
                 .fillMaxWidth()
@@ -261,11 +269,16 @@ fun BlueprintsScreen(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text("Ключові номінали на кресленні", style = MaterialTheme.typography.titleSmall)
-                BlueprintRow("Схема ФЕМ", "${uiState.config.seriesCount}S × ${uiState.config.parallelStrings}P (${uiState.metrics.totalPanelWatts} Вт)")
-                BlueprintRow("Напруга PV (зима -20°C)", "${uiState.metrics.arrayVocWinterMinus20.roundToInt()} В (MPPT ≥ ${uiState.metrics.requiredMpptMaxVoc} В)")
-                BlueprintRow("Кабель PV / Автомат PV", "${uiState.metrics.recommendedSolarCableMm2} мм² / DC ${uiState.metrics.recommendedSolarBreakerA} А")
-                BlueprintRow("Кабель АКБ / Запобіжник", "${uiState.metrics.recommendedBatteryCableMm2} мм² / ${uiState.metrics.recommendedBatteryFuseA} А (макс. ${uiState.metrics.maxDcBatteryCurrentA} А)")
-                BlueprintRow("Захист виходу AC 230В", "Автомат ${uiState.metrics.recommendedAcBreakerA} А + ПЗВ 30 мА")
+                BlueprintRow("Місто та кут нахилу", "${config.city.cityName} • ${metrics.effectiveTiltDegrees}° (${config.panelOrientation.label})")
+                BlueprintRow("Схема ФЕМ", "${config.seriesCount}S × ${config.parallelStrings}P (${metrics.totalPanelWatts} Вт)")
+                BlueprintRow("Робоча Vmp / Voc (-20°C)", "${metrics.arrayVmp.roundToInt()} В / ${metrics.arrayVocWinterMinus20.roundToInt()} В")
+                BlueprintRow("Кабель PV / Автомат DC", "${metrics.recommendedSolarCableMm2} мм² / ${metrics.recommendedSolarBreakerA} А")
+                if (config.isDirectSolarHeater) {
+                    BlueprintRow("Кімната та навантаження", "${config.roomAreaM2} м² • потреба ~${metrics.recommendedHeaterWattsForRoom} Вт (${metrics.heaterCoveragePercent}%)")
+                } else {
+                    BlueprintRow("Кабель АКБ / Запобіжник", "${metrics.recommendedBatteryCableMm2} мм² / ${metrics.recommendedBatteryFuseA} А (макс. ${metrics.maxDcBatteryCurrentA} А)")
+                    BlueprintRow("Захист виходу AC 230В", "Автомат ${metrics.recommendedAcBreakerA} А + ПЗВ 30 мА")
+                }
             }
         }
     }
